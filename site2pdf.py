@@ -4,8 +4,6 @@ import os
 import subprocess
 import sys
 from urllib.parse import urlparse, urljoin, urldefrag
-import shutil
-import pprint
 
 import requests
 from PyPDF2 import PdfFileReader, PdfFileMerger
@@ -29,23 +27,14 @@ class Site2PDF():
         loop.run_until_complete(self.crawl_content(content_urls))
         loop.close()
 
-        pprint.pprint(self.content_list)
-
         # PDF merge
         merger = PdfFileMerger()
         for f in self.content_list:
-            filename = os.path.basename(f)
-            print('Appending ' + filename + '...')
+            print('Appending ' + f + '...')
             try:
-                fs = open(filename, 'rb')
+                fs = open(f, 'rb')
                 merger.append(PdfFileReader(fs), import_bookmarks=False)
                 fs.close()
-                tmpdir = self.md5(self.base_url)
-                if os.path.isdir(tmpdir):
-                    shutil.rmtree(tmpdir)
-                os.mkdir(tmpdir)
-                dst = './%s/%s' % (tmpdir, f)
-                shutil.move(filename, dst)
             except Exception as e:
                 print(e)
 
@@ -85,9 +74,13 @@ class Site2PDF():
         else:
             file = '%s.pdf' % self.md5(url)
 
-        subprocess.call(['/usr/local/bin/wkhtmltopdf', url, file])
+        tmpdir = self.md5(self.base_url)
+        if not os.path.isdir(tmpdir):
+            os.mkdir(tmpdir)
+        f = '%s/%s' % (tmpdir, file)
+        subprocess.call(['/usr/local/bin/wkhtmltopdf', url, f])
 
-        self.content_list[index] = file
+        self.content_list[index] = f
 
     def md5(self, string):
         m = hashlib.md5()
