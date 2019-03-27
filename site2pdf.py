@@ -1,62 +1,15 @@
+import asyncio
+import hashlib
+import os
+import subprocess
 import sys
 from urllib.parse import urlparse, urljoin, urldefrag
-import re
-import aiohttp
-import asyncio
+import shutil
+import pprint
+
 import requests
+from PyPDF2 import PdfFileReader, PdfFileMerger
 from bs4 import BeautifulSoup
-import pdfkit
-
-
-async def request(url, headers, timeout=None):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, timeout=timeout) as resp:
-            return await resp.text()
-
-
-class HtmlGenerator():
-    def __init__(self, base_url):
-        self.html_start = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">      
-"""
-
-        self.title_ele = ""
-        self.meta_list = []
-        self.body = ""
-        self.html_end = """
-</body>
-</html>
-"""
-        self.base_url = base_url
-
-    def add_meta_data(self, key, value):
-        meta_string = "<meta name={key} content={value}>".format_map({
-            'key': key,
-            'value': value
-        })
-        self.meta_list.append(meta_string)
-
-    def add_body(self, body):
-        self.body = body
-
-    def srcrepl(self, match):
-        "Return the file contents with paths replaced"
-        absolutePath = self.base_url
-        return "<" + match.group(1) + match.group(2) + "=" + "\"" + absolutePath + match.group(3) + match.group(
-            4) + "\"" + ">"
-
-    def relative_to_absolute_path(self, origin_text):
-        p = re.compile(r"<(.*?)(src|href)=\"(?!http)(.*?)\"(.*?)>")
-        updated_text = p.sub(self.srcrepl, origin_text)
-        return updated_text
-
-    def output(self):
-        full_html = self.html_start + self.title_ele + "".join(self.meta_list) \
-                    + "<body>" + self.body + self.html_end
-        return self.relative_to_absolute_path(full_html)
 
 
 class Site2PDF():
@@ -76,17 +29,32 @@ class Site2PDF():
         loop.run_until_complete(self.crawl_content(content_urls))
         loop.close()
 
-        body = ''.join(self.content_list)
-        html_g = HtmlGenerator(self.base_url)
-        html_g.add_body(body)
-        html_text = html_g.output()
-        self.write_pdf(html_text, '')
+        pprint.pprint(self.content_list)
+
+        # PDF merge
+        merger = PdfFileMerger()
+        for f in self.content_list:
+            filename = os.path.basename(f)
+            print('Appending ' + filename + '...')
+            try:
+                fs = open(filename, 'rb')
+                merger.append(PdfFileReader(fs), import_bookmarks=False)
+                fs.close()
+                tmpdir = self.md5(self.base_url)
+                if os.path.isdir(tmpdir):
+                    shutil.rmtree(tmpdir)
+                os.mkdir(tmpdir)
+                dst = './%s/%s' % (tmpdir, f)
+                shutil.move(filename, dst)
+            except Exception as e:
+                print(e)
+
+        merger.write(self.file_name)
 
     def collect_urls(self, start_url):
         response = requests.get(start_url, headers=self.headers)
         self.base_url = response.url
         base_o = urlparse(self.base_url)
-        start_url = response.url
         text = response.text
         soup = BeautifulSoup(text, 'html.parser')
         links = soup.find_all('a')
@@ -102,41 +70,32 @@ class Site2PDF():
     async def crawl_content(self, content_urls):
         tasks = []
         for index, url in enumerate(content_urls):
-            tasks.append(self.gettext(index, url))
+            tasks.append(self.getpdf(index, url))
         await asyncio.gather(*tasks)
         print('crawl : all done!')
 
-    async def gettext(self, index, url):
+    async def getpdf(self, index, url):
         print('crawling : ', url)
-        try:
-            metatext = await request(url, self.headers, timeout=30)
-        except Exception as e:
-            print("retrying : ", url)
-            metatext = await request(url, self.headers)
+        response = requests.get(url, headers=self.headers)
+        text = response.text
+        soup = BeautifulSoup(text, 'html.parser')
+        title = soup.find('title')
+        if len(title.string) > 0:
+            file = '%s.pdf' % title.string
+        else:
+            file = '%s.pdf' % self.md5(url)
 
-        self.content_list[index] = metatext
+        subprocess.call(['/usr/local/bin/wkhtmltopdf', url, file])
 
-    def write_pdf(self, html, css):
-        options = {
-            'page-size': 'Letter',
-            'margin-top': '0.75in',
-            'margin-right': '0.75in',
-            'margin-bottom': '0.75in',
-            'margin-left': '0.75in',
-            'encoding': "UTF-8",
-            'custom-header': [
-                ('Accept-Encoding', 'gzip')
-            ],
-            'cookie': [
-                ('cookie-name1', 'cookie-value1'),
-                ('cookie-name2', 'cookie-value2'),
-            ],
-            'outline-depth': 10,
-        }
-        pdfkit.from_string(html, self.file_name, options=options)
+        self.content_list[index] = file
+
+    def md5(self, string):
+        m = hashlib.md5()
+        m.update(string.encode('utf-8'))
+        return m.hexdigest()
 
 
 if __name__ == '__main__':
-    url = sys.argv[1]
-    file = sys.argv[2]
-    Site2PDF(url, file).run()
+    url_arg = sys.argv[1]
+    filename_arg = sys.argv[2]
+    Site2PDF(url_arg, filename_arg).run()
