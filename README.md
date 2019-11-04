@@ -1,4 +1,4 @@
-# Site2Pdf
+# Site to Pdf
 
 Convert Website to PDF
 
